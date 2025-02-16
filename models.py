@@ -44,6 +44,7 @@ class SASRec(nn.Module):
         self.item_embedding = nn.Embedding(self.item_size, self.hidden_size, padding_idx=0)
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size) # n
         self.position_embedding2 = nn.Embedding(self.max_seq_length, self.hidden_size) # s
+        self.position_embedding3 = nn.Embedding(self.max_seq_length, self.hidden_size) # t
         self.trm_encoder = TransformerEncoder( # n
             n_layers=self.n_layers,
             n_heads=self.n_heads,
@@ -55,6 +56,16 @@ class SASRec(nn.Module):
             layer_norm_eps=self.layer_norm_eps
         )
         self.trm_encoder2 = TransformerEncoder( # s
+            n_layers=self.n_layers,
+            n_heads=self.n_heads,
+            hidden_size=self.hidden_size,
+            inner_size=self.inner_size,
+            hidden_dropout_prob=self.hidden_dropout_prob,
+            attn_dropout_prob=self.attn_dropout_prob,
+            hidden_act=self.hidden_act,
+            layer_norm_eps=self.layer_norm_eps
+        )
+        self.trm_encoder3 = TransformerEncoder( # techer
             n_layers=self.n_layers,
             n_heads=self.n_heads,
             hidden_size=self.hidden_size,
@@ -112,7 +123,19 @@ class SASRec(nn.Module):
         trm_output = self.trm_encoder2(input_emb, extended_attention_mask, output_all_encoded_layers=True)
         s_output = trm_output[-1]
 
-        return n_output, s_output
+        position_embedding = self.position_embedding3(position_ids)
+
+        item_emb = self.item_embedding(item_seq)
+        input_emb = item_emb + position_embedding
+        input_emb = self.LayerNorm(input_emb)
+        input_emb = self.dropout(input_emb)
+
+        extended_attention_mask = get_attention_mask(item_seq)
+
+        trm_output = self.trm_encoder3(input_emb, extended_attention_mask, output_all_encoded_layers=True)
+        t_output = trm_output[-1]
+
+        return n_output, s_output, t_output
 
 
 

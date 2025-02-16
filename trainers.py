@@ -6,7 +6,7 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-
+from torch.nn.functional import kl_div, log_softmax
 from modules import NCELoss, NTXent
 from torch.utils.data import DataLoader, RandomSampler
 from datasets import DataSets
@@ -69,6 +69,7 @@ class Trainer:
         train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=self.args.batch_size)
         return train_dataloader
+    
 
     def train(self, epoch):
         
@@ -189,7 +190,7 @@ class CoSeRecTrainer(Trainer):
         """
         cl_batch = torch.cat(inputs, dim=0)
         cl_batch = cl_batch.to(self.device)
-        n_cl_sequence_output, s_cl_sequence_output = self.model.transformer_encoder(cl_batch)
+        n_cl_sequence_output, s_cl_sequence_output, t_cl_sequence_output = self.model.transformer_encoder(cl_batch)
         # cf_sequence_output = cf_sequence_output[:, -1, :]
         n_cl_sequence_flatten = n_cl_sequence_output.view(cl_batch.shape[0], -1)
         # cf_output = self.projection(cf_sequence_flatten)
@@ -203,7 +204,25 @@ class CoSeRecTrainer(Trainer):
         s_cl_output_slice = torch.split(s_cl_sequence_flatten, batch_size)
         s_cl_loss = self.cf_criterion(s_cl_output_slice[0],
                                     s_cl_output_slice[1])
-        return n_cl_loss, s_cl_loss
+        t_cl_sequence_flatten = t_cl_sequence_output.view(cl_batch.shape[0], -1)
+        # cf_output = self.projection(cf_sequence_flatten)
+        batch_size = cl_batch.shape[0] // 2
+        t_cl_output_slice = torch.split(t_cl_sequence_flatten, batch_size)
+        t_cl_loss = self.cf_criterion(t_cl_output_slice[0],
+                                    t_cl_output_slice[1])
+        return n_cl_loss, s_cl_loss, t_cl_loss
+    
+    def mutual_kl_divergence(self, log_probs1, log_probs2):
+        """
+        log_probs1, log_probs2: 이미 log_softmax가 적용된 [B*seq_len, item_size] 형태
+        """
+        # 이미 log-softmax된 값이라면, 내부에서 또 log_softmax를 하면 안됨
+        p1 = log_probs1.exp()  # shape = [B*seq_len, item_size]
+        p2 = log_probs2.exp()
+        # reduction='none'로 각 샘플별 kl 값을 얻고, 필요한 경우 마스킹으로 처리
+        kl_12 = kl_div(log_probs1, p2, reduction='none').sum(dim=-1)  # [B*seq_len]
+        kl_21 = kl_div(log_probs2, p1, reduction='none').sum(dim=-1)
+        return kl_12 + kl_21  # [B*seq_len] 원소별 kl 값 합
 
     def iteration(self, epoch, n_dataloader, s_dataloader,full_sort=True, mode='train'):
         if mode == 'train':
@@ -227,25 +246,30 @@ class CoSeRecTrainer(Trainer):
                 _, input_ids, target_pos, target_neg, _ = rec_batch
 
                 # ---------- recommendation task ---------------#
-                n_sequence_output, s_sequence_output = self.model.transformer_encoder(input_ids)
+                n_sequence_output, s_sequence_output, t_sequence_output = self.model.transformer_encoder(input_ids)
                 n_rec_loss = self.cross_entropy(n_sequence_output, target_pos, target_neg)
                 s_rec_loss = self.cross_entropy(s_sequence_output, target_pos, target_neg)
-
+                t_rec_loss = self.cross_entropy(t_sequence_output, target_pos, target_neg)
+                #print(n_sequence_output.shape)
                 # ---------- contrastive learning task -------------#
                 n_cl_losses = []
                 s_cl_losses = []
                 for cl_batch in cl_batches:
-                    n_cl_loss, s_cl_loss = self._one_pair_contrastive_learning(cl_batch)
+                    n_cl_loss, s_cl_loss, t_cl_loss = self._one_pair_contrastive_learning(cl_batch)
                     n_cl_losses.append(n_cl_loss)
-
+                
                 joint_loss = self.args.rec_weight * n_rec_loss
-                joint_loss += 0.1 * s_rec_loss
+                B, seq_len, hidden_dim = n_sequence_output.size()
+                # [num_items, hidden_dim]
+
                 for cl_loss in n_cl_losses:
                     joint_loss += self.args.cf_weight * cl_loss
                 for param in self.model.trm_encoder2.parameters():
                     param.requires_grad = False
                 for param in self.model.trm_encoder.parameters():
                     param.requires_grad = True
+                self.model.position_embedding.weight.requires_grad = True
+                self.model.position_embedding2.weight.requires_grad = False
                 self.optim.zero_grad()
                 joint_loss.backward()
                 self.optim.step()
@@ -286,26 +310,51 @@ class CoSeRecTrainer(Trainer):
                 _, input_ids, target_pos, target_neg, _ = rec_batch
 
                 # ---------- recommendation task ---------------#
-                n_sequence_output, s_sequence_output = self.model.transformer_encoder(input_ids)
+                n_sequence_output, s_sequence_output, t_sequence_output = self.model.transformer_encoder(input_ids)
                 n_rec_loss = self.cross_entropy(n_sequence_output, target_pos, target_neg)
                 s_rec_loss = self.cross_entropy(s_sequence_output, target_pos, target_neg)
+                t_rec_loss = self.cross_entropy(t_sequence_output, target_pos, target_neg)
 
                 # ---------- contrastive learning task -------------#
                 cl_losses = []
                 n_cl_losses = []
                 s_cl_losses = []
                 for cl_batch in cl_batches:
-                    n_cl_loss, s_cl_loss = self._one_pair_contrastive_learning(cl_batch)
+                    n_cl_loss, s_cl_loss, t_cl_loss = self._one_pair_contrastive_learning(cl_batch)
                     s_cl_losses.append(s_cl_loss)
 
                 joint_loss = self.args.rec_weight * s_rec_loss
-                joint_loss += 0.1 * n_rec_loss
+                all_item_emb = self.model.item_embedding.weight
+
+                # [B*seq_len, hidden_dim]
+                n_seq_flat = n_sequence_output.view(-1, hidden_dim)
+                s_seq_flat = s_sequence_output.view(-1, hidden_dim)
+
+                # [B*seq_len, num_items]
+                n_logits = torch.matmul(n_seq_flat, all_item_emb.transpose(0,1))
+                s_logits = torch.matmul(s_seq_flat, all_item_emb.transpose(0,1))
+                # log softmax
+                n_log_probs = log_softmax(n_logits, dim=-1)
+                s_log_probs = log_softmax(s_logits, dim=-1)
+
+                ### (B) 패딩 마스크
+                # target_pos가 0인 곳은 (학습 시점이 없는) 패딩
+                # shape = [B, seq_len] -> 일렬화 -> [B*seq_len]
+                mask = (target_pos > 0).view(-1).float()
+
+                ### (C) KL 계산 (reduction='none' 활용)
+                kl_each_pos = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
+                # 패딩 위치 제외 후 평균
+                ml_loss = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
+                joint_loss += 0.5 * ml_loss
                 for cl_loss in s_cl_losses:
                     joint_loss += self.args.cf_weight * cl_loss
                 for param in self.model.trm_encoder2.parameters():
                     param.requires_grad = True
                 for param in self.model.trm_encoder.parameters():
                     param.requires_grad = False
+                self.model.position_embedding.weight.requires_grad = False
+                self.model.position_embedding2.weight.requires_grad = True
                 self.optim.zero_grad()
                 joint_loss.backward()
                 self.optim.step()
@@ -350,7 +399,7 @@ class CoSeRecTrainer(Trainer):
                     user_ids, input_ids, target_pos, target_neg, answers = batch
                     recommend_output = self.model.transformer_encoder(input_ids)
 
-                    n_recommend_output, s_recommend_output = recommend_output
+                    n_recommend_output, s_recommend_output, t_output = recommend_output
                     n_recommend_output = n_recommend_output[:,-1,:]
                     # recommendation results
 
@@ -387,7 +436,7 @@ class CoSeRecTrainer(Trainer):
                     user_ids, input_ids, target_pos, target_neg, answers = batch
                     recommend_output = self.model.transformer_encoder(input_ids)
 
-                    n_recommend_output, s_recommend_output = recommend_output
+                    n_recommend_output, s_recommend_output, t_output = recommend_output
                     s_recommend_output = s_recommend_output[:, -1, :]
                     # recommendation results
 

@@ -198,11 +198,11 @@ class Insert(object):
             if index in insert_idx:
                 top_k = random.randint(1, max(1, int(self.max_insert_num_per_pos / insert_nums)))
                 if self.ensemble:
-                    top_k_one = self.item_sim_model_1.most_similar3(item, top_k=top_k, with_score=True)
-                    top_k_two = self.item_sim_model_2.most_similar3(item, top_k=top_k, with_score=True)
+                    top_k_one = self.item_sim_model_1.most_similar(item, top_k=top_k, with_score=True)
+                    top_k_two = self.item_sim_model_2.most_similar(item, top_k=top_k, with_score=True)
                     inserted_sequence += _ensmeble_sim_models(top_k_one, top_k_two)
                 else:
-                    inserted_sequence += self.item_similarity_model.most_similar3(item, top_k=top_k)
+                    inserted_sequence += self.item_similarity_model.most_similar(item, top_k=top_k)
 
         return inserted_sequence
 
@@ -260,13 +260,13 @@ class Substitute(object):
 
         for index in substitute_idx:
             if self.ensemble:
-                top_k_one = self.item_sim_model_1.most_similar3(copied_sequence[index], with_score=True)
-                top_k_two = self.item_sim_model_2.most_similar3(copied_sequence[index], with_score=True)
+                top_k_one = self.item_sim_model_1.most_similar(copied_sequence[index], with_score=True)
+                top_k_two = self.item_sim_model_2.most_similar(copied_sequence[index], with_score=True)
                 substitute_items = _ensmeble_sim_models(top_k_one, top_k_two)
                 copied_sequence[index] = substitute_items[0]
             else:
                 copied_sequence[index] = copied_sequence[index] = \
-                    self.item_similarity_model.most_similar3(copied_sequence[index])[0]
+                    self.item_similarity_model.most_similar(copied_sequence[index])[0]
         return copied_sequence
 
 
