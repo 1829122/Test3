@@ -220,9 +220,9 @@ class CoSeRecTrainer(Trainer):
         p1 = log_probs1.exp()  # shape = [B*seq_len, item_size]
         p2 = log_probs2.exp()
         # reduction='none'로 각 샘플별 kl 값을 얻고, 필요한 경우 마스킹으로 처리
-        kl_12 = kl_div(log_probs1, p2, reduction='none').sum(dim=-1)  # [B*seq_len]
-        kl_21 = kl_div(log_probs2, p1, reduction='none').sum(dim=-1)
-        return kl_12 + kl_21  # [B*seq_len] 원소별 kl 값 합
+        kl_12 = kl_div(p1, p2, reduction='none').sum(dim=-1)  # [B*seq_len]
+        kl_21 = kl_div(p2, p1, reduction='none').sum(dim=-1)
+        return kl_12  # [B*seq_len] 원소별 kl 값 합
 
     def iteration(self, epoch, n_dataloader, s_dataloader,full_sort=True, mode='train'):
         if mode == 'train':
@@ -261,6 +261,29 @@ class CoSeRecTrainer(Trainer):
                 joint_loss = self.args.rec_weight * n_rec_loss
                 B, seq_len, hidden_dim = n_sequence_output.size()
                 # [num_items, hidden_dim]
+                all_item_emb = self.model.item_embedding.weight
+
+                # [B*seq_len, hidden_dim]
+                n_seq_flat = n_sequence_output.view(-1, hidden_dim)
+                s_seq_flat = s_sequence_output.view(-1, hidden_dim)
+
+                # [B*seq_len, num_items]
+                n_logits = torch.matmul(n_seq_flat, all_item_emb.transpose(0,1))
+                s_logits = torch.matmul(s_seq_flat, all_item_emb.transpose(0,1))
+                # log softmax
+                n_log_probs = log_softmax(n_logits, dim=-1)
+                s_log_probs = log_softmax(s_logits, dim=-1)
+
+                ### (B) 패딩 마스크
+                # target_pos가 0인 곳은 (학습 시점이 없는) 패딩
+                # shape = [B, seq_len] -> 일렬화 -> [B*seq_len]
+                mask = (target_pos > 0).view(-1).float()
+
+                ### (C) KL 계산 (reduction='none' 활용)
+                kl_each_pos = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
+                # 패딩 위치 제외 후 평균
+                ml_loss = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
+                joint_loss += ml_loss
 
                 for cl_loss in n_cl_losses:
                     joint_loss += self.args.cf_weight * cl_loss
@@ -343,10 +366,10 @@ class CoSeRecTrainer(Trainer):
                 mask = (target_pos > 0).view(-1).float()
 
                 ### (C) KL 계산 (reduction='none' 활용)
-                kl_each_pos = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
+                kl_each_pos = self.mutual_kl_divergence(n_log_probs, s_log_probs)  # [B*seq_len]
                 # 패딩 위치 제외 후 평균
                 ml_loss = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
-                joint_loss += 0.5 * ml_loss
+                joint_loss += ml_loss
                 for cl_loss in s_cl_losses:
                     joint_loss += self.args.cf_weight * cl_loss
                 for param in self.model.trm_encoder2.parameters():
@@ -480,6 +503,8 @@ class CoSeRecTrainer(Trainer):
                     "HIT@20": '{:.4f}'.format(final_recall[3]), "NDCG@20": '{:.4f}'.format(final_ndcg[3])
                 }
                 print(post_fix)
+                with open(self.args.log_file, 'a') as f:
+                    f.write(str(post_fix) + '\n')
                 if mode =='test':
                     with open(self.args.test_log_file, 'a') as f:
                         f.write(str(post_fix) + '\n')
