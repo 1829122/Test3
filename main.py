@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./output')
     parser.add_argument('--data_name', type=str, default='Beauty')
     parser.add_argument('--do_eval', action='store_true')
-    parser.add_argument('--model_idx', type=int, default=6, help="model identifier 1,2,3,4,5,6,7...")
+    parser.add_argument('--model_idx', type=int, default=7, help="model identifier 1,2,3,4,5,6,7...")
     parser.add_argument("--gpu_id", type=str, default="3", help="gpu_id")
     parser.add_argument("--eval_path", type=str, default='./output', help="checkpoint path for eval")
 
