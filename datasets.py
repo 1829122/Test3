@@ -66,11 +66,65 @@ class DataSets(Dataset):
         )
 
         return cur_rec_tensors
+    '''    
+    def _data_sample_rec_task(self, user_id, items, input_ids, target_pos, answer):
+        # make a deep copy to avoid modifying the original sequence
+        copied_input_ids = copy.deepcopy(input_ids)
+        seq_len = len(copied_input_ids)  # 유저 시퀀스 길이
+        target_neg = []
+        seq_set = set(items)
+
+        # 네거티브 샘플링 수행
+        for _ in copied_input_ids:
+            target_neg.append(neg_sample(seq_set, self.args.item_size))
+
+        # 반복 패딩을 위해 필요한 횟수 계산
+        repeated_input = []
+        repeated_target_pos = []
+        repeated_target_neg = []
+
+        while len(repeated_input) + seq_len + 1 <= self.max_len:  # +1은 중간에 들어갈 0
+            repeated_input = [0] + copied_input_ids + repeated_input
+            repeated_target_pos = [0] + target_pos + repeated_target_pos
+            repeated_target_neg = [0] + [neg_sample(seq_set, self.args.item_size) for _ in target_pos] + repeated_target_neg
+
+        # 남은 길이만큼 앞에서 추가 (뒤에서 짤리지 않게)
+        remaining_len = self.max_len - len(repeated_input)
+        if remaining_len > 0:
+            repeated_input = [0] + copied_input_ids[-(remaining_len - 1):] + repeated_input
+            repeated_target_pos = [0] + target_pos[-(remaining_len - 1):] + repeated_target_pos
+            repeated_target_neg = [0] + [neg_sample(seq_set, self.args.item_size) for _ in target_pos[-(remaining_len - 1):]] + repeated_target_neg
+
+        # 길이 맞추기
+        repeated_input = repeated_input[-self.max_len:]
+        repeated_target_pos = repeated_target_pos[-self.max_len:]
+        repeated_target_neg = repeated_target_neg[-self.max_len:]
+
+        assert len(repeated_input) == self.max_len
+        assert len(repeated_target_pos) == self.max_len
+        assert len(repeated_target_neg) == self.max_len
+
+        # PyTorch 텐서 변환
+        cur_rec_tensors = (
+            torch.tensor(user_id, dtype=torch.long),
+            torch.tensor(repeated_input, dtype=torch.long),
+            torch.tensor(repeated_target_pos, dtype=torch.long),
+            torch.tensor(repeated_target_neg, dtype=torch.long),
+            torch.tensor(answer, dtype=torch.long),
+        )
+
+        return cur_rec_tensors
+        '''
     def __getitem__(self, index):
         user_id = index
         items = self.user_seq[index]
+        
+
         times = self.time_seq[index]
-        input_times = times[:-2]
+        if len(times) <= 1:
+            input_times = times
+        else:
+            input_times = times[:-2]
 
         self.total_train_users += 1
 

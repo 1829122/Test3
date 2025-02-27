@@ -28,8 +28,8 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./output')
     parser.add_argument('--data_name', type=str, default='Beauty')
     parser.add_argument('--do_eval', action='store_true')
-    parser.add_argument('--model_idx', type=int, default=7, help="model identifier 1,2,3,4,5,6,7...")
-    parser.add_argument("--gpu_id", type=str, default="3", help="gpu_id")
+    parser.add_argument('--model_idx', type=int, default=19, help="model identifier 1,2,3,4,5,6,7...")
+    parser.add_argument("--gpu_id", type=str, default="1", help="gpu_id")
     parser.add_argument("--eval_path", type=str, default='./output', help="checkpoint path for eval")
 
     # data augmentation args
@@ -94,7 +94,7 @@ def main():
     parser.add_argument('--inner_size', type=int, default=256, help='the dimensionality in feed-forward layer')
     parser.add_argument('--hidden_act', type=str, default="gelu")
     parser.add_argument("--attn_dropout_prob", type=float, default=0.2, help="attention dropout probability")
-    parser.add_argument("--hidden_dropout_prob", type=float, default=0.5, help="hidden dropout probability")
+    parser.add_argument("--hidden_dropout_prob", type=float, default=0.3, help="hidden dropout probability")
     parser.add_argument("--initializer_range", type=float, default=0.02)
     parser.add_argument('--max_seq_length', type=int, default=50)
     parser.add_argument('--layer_norm_eps', type=float, default=1e-12)
@@ -103,7 +103,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate of adam")
     parser.add_argument("--log_freq", type=int, default=1, help="per epoch print res")
     parser.add_argument("--seed", type=int, default=2022)
-    parser.add_argument("--batch_size", type=int, default=256, help="number of batch_size")
+    parser.add_argument("--batch_size", type=int, default=128, help="number of batch_size")
     parser.add_argument("--epochs", type=int, default=350, help="number of epochs")
     parser.add_argument("--patience", type=int, default=150, help="early stopping patience")
     parser.add_argument("--test_frequency", type=int, default=5, help="test frequency")
@@ -132,7 +132,7 @@ def main():
     args.data_file = os.path.join(args.data_dir, args.data_name, args.data_name + '_item.txt')
     args.time_file = os.path.join(args.data_dir, args.data_name, args.data_name + '_time.txt')
 
-    n_user_seq, n_time_seq,s_user_seq, s_time_seq, max_item, valid_rating_matrix, test_rating_matrix,  not_aug_users = get_user_seqs(args)
+    n_user_seq, n_time_seq,s_user_seq, s_time_seq, max_item, valid_rating_matrix, test_rating_matrix,  not_aug_users, n_valid_rating_matrix, n_test_rating_matrix, s_valid_rating_matrix, s_test_rating_matrix = get_user_seqs(args)
     
     args.item_size = max_item + 2
     args.mask_id = max_item + 1
@@ -150,7 +150,8 @@ def main():
 
     # set item score in train set to `0` in validation
     args.train_matrix = valid_rating_matrix
-
+    args.n_train_matrix = n_valid_rating_matrix
+    args.s_train_matrix = s_valid_rating_matrix
     # -----------   pre-computation for item similarity   ------------ #
     args.similarity_model_path = os.path.join(args.data_dir,
                                               args.data_name + '_' + args.similarity_model_name + '_similarity.pkl')
@@ -202,25 +203,44 @@ def main():
     else:
         print(f'Train TiCoSeRec')
         #early_stopping = EarlyStopping(args.checkpoint_path, patience=args.patience, verbose=True)
+        best_ndcg = 0.0
+        early_num = 0
         for epoch in range(args.epochs):
             
             trainer.train(epoch)
             # evaluate on NDCG@20
-            recall, ndcg = trainer.valid(epoch, full_sort=True)
+            #recall, ndcg = trainer.valid(epoch, full_sort=True)
          
             #early_stopping(np.array(scores[-1:]), trainer.model)
             #if early_stopping.early_stop:
                 #print("Early stopping")
                 #break
             
+            
+            #if (epoch + 1) % 10 == 0:
+            valid_recall, valid_ndcg = trainer.valid(epoch, full_sort=True)
             print('---------------Change to test_rating_matrix!-------------------')
             trainer.args.train_matrix = test_rating_matrix
+            trainer.args.n_train_matrix = n_test_rating_matrix
+            trainer.args.s_train_matrix = s_test_rating_matrix
             recall, ndcg = trainer.test(epoch, full_sort=True)
+            if epoch == 40:
+                best_ndcg = 0.0
             
-            save_path = os.path.join(args.checkpoint_path, 'epoch-' + str(epoch) + '.pt')
-            
-            torch.save(trainer.model.state_dict(), save_path)
-            args.train_matrix = valid_rating_matrix
+            if valid_ndcg[1] > best_ndcg:
+                early_num = 0
+                best_ndcg = valid_ndcg[1]
+                save_path = os.path.join(args.checkpoint_path, 'epoch-' + str(epoch) + '.pt')
+            else:
+                early_num += 1
+                
+                torch.save(trainer.model.state_dict(), save_path)
+            trainer.args.train_matrix = valid_rating_matrix
+            trainer.args.n_train_matrix = n_valid_rating_matrix
+            trainer.args.s_train_matrix = s_valid_rating_matrix
+    
+            if early_num == 150:
+                break
 
     print('Finish training')
 

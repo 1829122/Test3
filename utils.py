@@ -5,6 +5,7 @@ import torch
 import random
 import numpy as np
 from scipy.sparse import csr_matrix
+from collections import defaultdict
 
 def set_seed(seed):
     random.seed(seed)
@@ -140,8 +141,155 @@ def get_user_seqs(args):
     s_test_rating_matrix = generate_rating_matrix_test(s_user_seq, num_users, num_items)
     valid_rating_matrix = generate_rating_matrix_valid(a_user_seq, num_users, num_items)
     test_rating_matrix = generate_rating_matrix_test(a_user_seq, num_users, num_items)
-    return n_user_seq, n_time_seq,s_user_seq, s_time_seq, max_item, valid_rating_matrix,test_rating_matrix , not_aug_users
+    return n_user_seq, n_time_seq,s_user_seq, s_time_seq, max_item, valid_rating_matrix,test_rating_matrix , not_aug_users, n_valid_rating_matrix,n_test_rating_matrix,s_valid_rating_matrix,s_test_rating_matrix  
+def get_var(n_user_diff, s_user_diff):
+    n_user_var = defaultdict(float)
+    s_user_var = defaultdict(float)
+    
+    # n_user_diff의 각 인덱스별 합과 개수를 계산
+    n_count = defaultdict(int)
+    for idx, seq in enumerate(n_user_diff):
+        for value in range(len(seq)):
+            n_user_var[idx] += value
+            n_count[idx] += 1
+    
+    # 인덱스별 평균 계산
+    for idx in n_user_var:
+        n_user_var[idx] /= n_count[idx]
+    
+    # s_user_diff의 경우 동일하게 처리
+    s_count = defaultdict(int)
+    for idx, seq in enumerate(s_user_diff):
+        for value in range(len(seq)):
+            s_user_var[idx] += value
+            s_count[idx] += 1
+            
+    for idx in s_user_var:
+        s_user_var[idx] /= s_count[idx]
+    
+    return n_user_var, s_user_var
 
+
+
+def get_user_augmentation(n_user_seq, n_time_seq, s_user_seq, s_time_seq):
+    n_user_diff = []
+    s_user_diff = []
+    n_user_aug = []
+    s_user_aug = []
+    n_time_aug = []
+    s_time_aug = []
+
+    for n_seq in n_time_seq:
+        diff = []
+        for idx in range(len(n_seq)):
+            if idx == len(n_seq) - 1:
+                break
+            diff.append(n_seq[idx + 1] - n_seq[idx])
+
+        n_user_diff.append(diff)
+        diff = []
+    
+    for s_seq in s_time_seq:
+        diff = []
+        for idx in range(len(s_seq)):
+            if idx == len(s_seq) - 1:
+                break
+            diff.append(s_seq[idx + 1] - s_seq[idx])
+        s_user_diff.append(diff)
+        diff = []
+
+    n_user_var, s_user_var = get_var(n_user_diff, s_user_diff)
+
+    for user_seq, time_seq, n_time in zip(n_user_seq, n_user_diff, n_time_seq):
+        user_seq = user_seq[:-2]
+        time_seq = time_seq[:-2]
+        n_time = n_time[:-2]
+        n_user_aug.append(user_seq)
+        n_time_aug.append(n_time)
+        a_user = []
+        a_time = []
+        user_new_list = []
+        time_new_list = []
+        user_new_list.append(user_seq[0])
+        time_new_list.append(n_time[0])
+        for idx in range(1, len(time_seq) + 1):
+            if n_user_var[idx] > time_seq[idx - 1]:
+                user_new_list.append(user_seq[idx])
+                time_new_list.append(n_time[idx])
+            else:
+                user_new_list.append(user_seq[idx])
+                time_new_list.append(n_time[idx])
+                n_user_aug.append(user_new_list)
+                n_time_aug.append(time_new_list)
+                a_user.append(user_new_list)
+                a_time.append(time_new_list)
+                user_new_list = []
+                time_new_list = []
+                user_new_list.append(user_seq[idx])
+                time_new_list.append(n_time[idx])
+            if len(user_seq) == idx:
+                if len(user_new_list) <= 1:
+                    continue
+                else:
+                    n_user_aug.append(user_new_list)
+                    n_time_aug.append(time_new_list)
+                    a_user.append(user_new_list)
+                    a_time.append(time_new_list)
+        list1 = []
+        list2 = []
+        for idx2 in range(len(a_user) - 1):
+            if idx2 == len(a_user) - 1:
+                break
+            n_user_aug.append(a_user[idx2] + a_user[idx2+1])
+            n_time_aug.append(a_time[idx2] + a_time[idx2+1])
+            #s_user_aug.append(a_user[idx2] + a_user[idx2+1])
+            #s_time_aug.append(a_time[idx2] + a_time[idx2+1])
+            
+        
+    for user_seq, time_seq, s_time in zip(s_user_seq, s_user_diff, s_time_seq):
+        user_seq = user_seq[:-2]
+        time_seq = time_seq[:-2]
+        s_time = s_time[:-2]
+        a_user = []
+        a_time = []
+        s_user_aug.append(user_seq)
+        s_time_aug.append(s_time)
+        user_new_list = []
+        time_new_list = []
+        user_new_list.append(user_seq[0])
+        time_new_list.append(s_time[0])
+        for idx in range(1, len(time_seq) + 1):
+            if s_user_var[idx] > time_seq[idx - 1]:
+                user_new_list.append(user_seq[idx])
+                time_new_list.append(s_time[idx])
+            else:
+                user_new_list.append(user_seq[idx])
+                time_new_list.append(s_time_seq[idx])
+                s_user_aug.append(user_new_list)
+                s_time_aug.append(time_new_list)
+                a_user.append(user_new_list)
+                a_time.append(time_new_list)
+                user_new_list = []
+                time_new_list = []
+                user_new_list.append(user_seq[idx])
+                time_new_list.append(s_time_seq[idx])
+            if len(user_seq) == idx:
+                if len(user_new_list) <= 1:
+                    continue
+                else:
+                    s_user_aug.append(user_new_list)
+                    s_time_aug.append(time_new_list)
+                    a_user.append(user_new_list)
+                    a_time.append(time_new_list)
+        list1 = []
+        list2 = []
+        for idx2 in range(len(a_user) - 1):
+            if idx2 == len(a_user) - 1:
+                break
+            s_user_aug.append(a_user[idx2] + a_user[idx2+1])
+            s_time_aug.append(a_time[idx2] + a_time[idx2+1])
+            
+    return n_user_aug, n_time_aug, s_user_aug, s_time_aug
 
 def ndcg_k(actual, predicted, topk):
     res = 0
