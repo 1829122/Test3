@@ -28,7 +28,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./output')
     parser.add_argument('--data_name', type=str, default='Beauty')
     parser.add_argument('--do_eval', action='store_true')
-    parser.add_argument('--model_idx', type=int, default=19, help="model identifier 1,2,3,4,5,6,7...")
+    parser.add_argument('--model_idx', type=int, default=20, help="model identifier 1,2,3,4,5,6,7...")
     parser.add_argument("--gpu_id", type=str, default="1", help="gpu_id")
     parser.add_argument("--eval_path", type=str, default='./output', help="checkpoint path for eval")
 
@@ -72,7 +72,7 @@ def main():
     parser.add_argument("--var_rank_not_aug_ratio", type=float, default=0.15,
                         help="Using the data ranked by time interval variance, \
                         percentage of training samples (user interaction sequence) will not be augmented")
-    parser.add_argument("--model_warm_up_epochs", type=int, default=40,
+    parser.add_argument("--model_warm_up_epochs", type=int, default=350,
                         help="number of epochs to train model without contrastive learning. "
                              "If this parameter is 0, contrastive learning will be included from the first epoch")
     parser.add_argument('--not_aug_data_mode', default='original', type=str, help="original or zero\
@@ -94,7 +94,7 @@ def main():
     parser.add_argument('--inner_size', type=int, default=256, help='the dimensionality in feed-forward layer')
     parser.add_argument('--hidden_act', type=str, default="gelu")
     parser.add_argument("--attn_dropout_prob", type=float, default=0.2, help="attention dropout probability")
-    parser.add_argument("--hidden_dropout_prob", type=float, default=0.3, help="hidden dropout probability")
+    parser.add_argument("--hidden_dropout_prob", type=float, default=0.5, help="hidden dropout probability")
     parser.add_argument("--initializer_range", type=float, default=0.02)
     parser.add_argument('--max_seq_length', type=int, default=50)
     parser.add_argument('--layer_norm_eps', type=float, default=1e-12)
@@ -103,7 +103,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate of adam")
     parser.add_argument("--log_freq", type=int, default=1, help="per epoch print res")
     parser.add_argument("--seed", type=int, default=2022)
-    parser.add_argument("--batch_size", type=int, default=128, help="number of batch_size")
+    parser.add_argument("--batch_size", type=int, default=256, help="number of batch_size")
     parser.add_argument("--epochs", type=int, default=350, help="number of epochs")
     parser.add_argument("--patience", type=int, default=150, help="early stopping patience")
     parser.add_argument("--test_frequency", type=int, default=5, help="test frequency")
@@ -219,22 +219,22 @@ def main():
             
             #if (epoch + 1) % 10 == 0:
             valid_recall, valid_ndcg = trainer.valid(epoch, full_sort=True)
+            if valid_ndcg[1] > best_ndcg:
+                early_num = 0
+                best_ndcg = valid_ndcg[1]
+                save_path = os.path.join(args.checkpoint_path, 'epoch-' + str(epoch) + '.pt')
+                torch.save(trainer.model.state_dict(), save_path)
+            else:
+                early_num += 1 
             print('---------------Change to test_rating_matrix!-------------------')
             trainer.args.train_matrix = test_rating_matrix
             trainer.args.n_train_matrix = n_test_rating_matrix
             trainer.args.s_train_matrix = s_test_rating_matrix
             recall, ndcg = trainer.test(epoch, full_sort=True)
-            if epoch == 40:
-                best_ndcg = 0.0
+            #if epoch == 40:
+               # best_ndcg = 0.0
             
-            if valid_ndcg[1] > best_ndcg:
-                early_num = 0
-                best_ndcg = valid_ndcg[1]
-                save_path = os.path.join(args.checkpoint_path, 'epoch-' + str(epoch) + '.pt')
-            else:
-                early_num += 1
-                
-                torch.save(trainer.model.state_dict(), save_path)
+              
             trainer.args.train_matrix = valid_rating_matrix
             trainer.args.n_train_matrix = n_valid_rating_matrix
             trainer.args.s_train_matrix = s_valid_rating_matrix

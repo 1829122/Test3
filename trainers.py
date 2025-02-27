@@ -6,7 +6,7 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch.nn.functional import kl_div, log_softmax, softmax
+from torch.nn.functional import kl_div, log_softmax
 from modules import NCELoss, NTXent
 from torch.utils.data import DataLoader, RandomSampler
 from datasets import DataSets
@@ -213,20 +213,17 @@ class CoSeRecTrainer(Trainer):
         return n_cl_loss, s_cl_loss, t_cl_loss
     
     def mutual_kl_divergence(self, log_probs1, log_probs2):
+        """
+        log_probs1, log_probs2: 이미 log_softmax가 적용된 [B*seq_len, item_size] 형태
+        """
         # 이미 log-softmax된 값이라면, 내부에서 또 log_softmax를 하면 안됨
-        #p1 = log_probs1  # shape = [B*seq_len, item_size]
-        #p2 = log_probs2
-        pq = (log_probs1 * log_probs2).sum(dim = -1)
-        #제대로 된 KL divergence
-        p1 = log_probs1
+        p1 = log_probs1.exp()  # shape = [B*seq_len, item_size]
         p2 = log_probs2.exp()
+        pq = 0.5 * (p2 * torch.log(p2)).sum(dim = -1)
         # reduction='none'로 각 샘플별 kl 값을 얻고, 필요한 경우 마스킹으로 처리
-        
-        #kl_12 = kl_div(p1, p2, reduction='none').sum(dim=-1)  # [B*seq_len]
-        #p1 = log_probs1.exp()  # shape = [B*seq_len, item_size]
-        #p2 = log_probs2
-        #kl_21 = kl_div(p2, p1, reduction='none').sum(dim=-1)
-        return pq # [B*seq_len] 원소별 kl 값 합
+        kl_12 = kl_div(p1, p2, reduction='none').sum(dim=-1)  # [B*seq_len]
+        kl_21 = kl_div(p2, p1, reduction='none').sum(dim=-1)
+        return pq  # [B*seq_len] 원소별 kl 값 합
 
     def iteration(self, epoch, n_dataloader, s_dataloader,full_sort=True, mode='train'):
         if mode == 'train':
@@ -235,11 +232,10 @@ class CoSeRecTrainer(Trainer):
             cl_individual_avg_losses = [0.0 for i in range(self.total_augmentaion_pairs)]
             cl_sum_avg_loss = 0.0
             joint_avg_loss = 0.0
-            ml_avg_loss = 0.0
-            kl_avg = 0.0
+
             print(f"rec dataset length: {len(n_dataloader)}")
             rec_cf_data_iter = tqdm(enumerate(n_dataloader), total=len(n_dataloader))
-            #self.model.item_embedding.weight.requires_grad = False
+
             for i, (rec_batch, cl_batches) in rec_cf_data_iter:
                 '''
                 rec_batch shape: key_name x batch_size x feature_dim
@@ -264,7 +260,6 @@ class CoSeRecTrainer(Trainer):
                     n_cl_losses.append(n_cl_loss)
                 
                 joint_loss = self.args.rec_weight * n_rec_loss
-                
                 B, seq_len, hidden_dim = n_sequence_output.size()
                 # [num_items, hidden_dim]
                 all_item_emb = self.model.item_embedding.weight
@@ -273,31 +268,23 @@ class CoSeRecTrainer(Trainer):
                 n_seq_flat = n_sequence_output.view(-1, hidden_dim)
                 s_seq_flat = s_sequence_output.view(-1, hidden_dim)
 
-                # [B*seq_len, num_items] 모든 timestep마다 전체 아이템 확률 구해서 비교
+                # [B*seq_len, num_items]
                 n_logits = torch.matmul(n_seq_flat, all_item_emb.transpose(0,1))
                 s_logits = torch.matmul(s_seq_flat, all_item_emb.transpose(0,1))
-                
-                #n_logits, _ = torch.topk(n_logits, 100, dim=-1)
-                #s_logits, _ = torch.topk(s_logits, 100, dim=-1)
-                
                 # log softmax
-                n_log_probs = softmax(n_logits, dim=-1)
-                s_log_probs = softmax(s_logits, dim=-1)
+                n_log_probs = log_softmax(n_logits, dim=-1)
+                s_log_probs = log_softmax(s_logits, dim=-1)
 
-                # 패딩 마스크
-                # target_pos가 0인 곳은  패딩
+                # target_pos가 0인 곳은 (학습 시점이 없는) 패딩
+                # shape = [B, seq_len] ->  [B*seq_len]
                 mask = (target_pos > 0).view(-1).float()
 
-                # KL 계산 
-                #kl_each_pos, pq = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
-                pq = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
+                # KL 계산 (reduction='none' 활용)
+                kl_each_pos = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
                 # 패딩 위치 제외 후 평균
-                #kl = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
-                ml_loss = (pq * mask).sum() / (mask.sum() + 1e-9)
-                ml_avg_loss += ml_loss
+                ml_loss = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
                 joint_loss += ml_loss
-                #kl_avg += kl
-                
+
                 for cl_loss in n_cl_losses:
                     joint_loss += self.args.cf_weight * cl_loss
                 for param in self.model.trm_encoder2.parameters():
@@ -320,8 +307,6 @@ class CoSeRecTrainer(Trainer):
             post_fix = {
             "epoch": epoch,
             "rec_avg_loss": '{:.4f}'.format(rec_avg_loss / len(rec_cf_data_iter)),
-            "ml_avg_loss": '{:.4f}'.format(ml_avg_loss / len(rec_cf_data_iter)),
-            #"kl_avg": '{:.4f}'.format(kl_avg / len(rec_cf_data_iter)),
             "joint_avg_loss": '{:.4f}'.format(joint_avg_loss / len(rec_cf_data_iter)),
             "cl_avg_loss": '{:.4f}'.format(
                 cl_sum_avg_loss / (len(rec_cf_data_iter) * self.total_augmentaion_pairs)),
@@ -336,8 +321,6 @@ class CoSeRecTrainer(Trainer):
             cl_individual_avg_losses = [0.0 for i in range(self.total_augmentaion_pairs)]
             cl_sum_avg_loss = 0.0
             joint_avg_loss = 0.0
-            ml_avg_loss = 0.0
-            kl_avg = 0.0
             rec_cf_data_iter = tqdm(enumerate(s_dataloader), total=len(s_dataloader))
             for i, (rec_batch, cl_batches) in rec_cf_data_iter:
                 '''
@@ -364,9 +347,8 @@ class CoSeRecTrainer(Trainer):
                     s_cl_losses.append(s_cl_loss)
 
                 joint_loss = self.args.rec_weight * s_rec_loss
-                
                 all_item_emb = self.model.item_embedding.weight
-                
+
                 # [B*seq_len, hidden_dim]
                 n_seq_flat = n_sequence_output.view(-1, hidden_dim)
                 s_seq_flat = s_sequence_output.view(-1, hidden_dim)
@@ -374,26 +356,20 @@ class CoSeRecTrainer(Trainer):
                 # [B*seq_len, num_items]
                 n_logits = torch.matmul(n_seq_flat, all_item_emb.transpose(0,1))
                 s_logits = torch.matmul(s_seq_flat, all_item_emb.transpose(0,1))
-                #n_logits, _ = torch.topk(n_logits, 100, dim=-1)
-                #s_logits, _ = torch.topk(s_logits, 100, dim=-1)
                 # log softmax
-                n_log_probs = softmax(n_logits, dim=-1)
-                s_log_probs = softmax(s_logits, dim=-1)
+                n_log_probs = log_softmax(n_logits, dim=-1)
+                s_log_probs = log_softmax(s_logits, dim=-1)
 
-                # 패딩 마스크
-                # target_pos가 0인 곳은 패딩
+                ### (B) 패딩 마스크
+                # target_pos가 0인 곳은 (학습 시점이 없는) 패딩
+                # shape = [B, seq_len] -> 일렬화 -> [B*seq_len]
                 mask = (target_pos > 0).view(-1).float()
-                
-                # KL 계산 
-                #kl_each_pos, pq = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
-                pq = self.mutual_kl_divergence(s_log_probs, n_log_probs)  # [B*seq_len]
+
+                ### (C) KL 계산 (reduction='none' 활용)
+                kl_each_pos = self.mutual_kl_divergence(n_log_probs, s_log_probs)  # [B*seq_len]
                 # 패딩 위치 제외 후 평균
-                #kl = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
-                ml_loss = (pq * mask).sum() / (mask.sum() + 1e-9)
-                ml_avg_loss += ml_loss
+                ml_loss = (kl_each_pos * mask).sum() / (mask.sum() + 1e-9)
                 joint_loss += ml_loss
-                #kl_avg += kl
-                
                 for cl_loss in s_cl_losses:
                     joint_loss += self.args.cf_weight * cl_loss
                 for param in self.model.trm_encoder2.parameters():
@@ -416,8 +392,6 @@ class CoSeRecTrainer(Trainer):
             post_fix = {
                 "epoch": epoch,
                 "rec_avg_loss": '{:.4f}'.format(rec_avg_loss / len(rec_cf_data_iter)),
-                "ml_avg_loss": '{:.4f}'.format(ml_avg_loss / len(rec_cf_data_iter)),
-                #kl_avg": '{:.4f}'.format(kl_avg / len(rec_cf_data_iter)),
                 "joint_avg_loss": '{:.4f}'.format(joint_avg_loss / len(rec_cf_data_iter)),
                 "cl_avg_loss": '{:.4f}'.format(
                     cl_sum_avg_loss / (len(rec_cf_data_iter) * self.total_augmentaion_pairs)),
