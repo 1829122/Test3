@@ -219,7 +219,12 @@ class CoSeRecTrainer(Trainer):
         # 이미 log-softmax된 값이라면, 내부에서 또 log_softmax를 하면 안됨
         p1 = log_probs1.exp()  # shape = [B*seq_len, item_size]
         p2 = log_probs2.exp()
-        pq = 0.5 * (p2 * torch.log(p2)).sum(dim = -1)
+        '''
+        마이너스를 빼낸다면  Loss = -(PQ - PlogP)의 형태
+        뒤에 PlogP는 정보 엔트로피의 식과 동일 해당 식을을
+        '''
+        pq = (p2 * (torch.log(p2) - p1)).sum(dim = -1) # KL divergence XXXXX
+        #pq = (p2 * (torch.log(p2) - torch.log(p1))).sum(dim = -1) # KL divergence입니다.
         # reduction='none'로 각 샘플별 kl 값을 얻고, 필요한 경우 마스킹으로 처리
         kl_12 = kl_div(p1, p2, reduction='none').sum(dim=-1)  # [B*seq_len]
         kl_21 = kl_div(p2, p1, reduction='none').sum(dim=-1)
