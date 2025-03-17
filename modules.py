@@ -135,6 +135,8 @@ class FeedForward(nn.Module):
             "swish": self.swish,
             "tanh": torch.tanh,
             "sigmoid": torch.sigmoid,
+            "rrelu": nn.RReLU(lower=1/8, upper=1/3),
+            "prelu": nn.PReLU(num_parameters=1, init=0.25)
         }
         return ACT2FN[act]
 
@@ -347,3 +349,6 @@ def get_attention_mask(item_seq, bidirectional=False):
         #print(extended_attention_mask)
     extended_attention_mask = torch.where(extended_attention_mask, 0., -10000.)
     return extended_attention_mask
+
+
+

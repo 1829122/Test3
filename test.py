@@ -1,8 +1,3 @@
-import torch
-
-checkpoint = torch.load("epoch-184.pt", map_location = torch.device("cuda:3"))
-
-print(checkpoint.keys())
-
-
-
+import faiss
+print(faiss.__version__)
+print(hasattr(faiss, "StandardGpuResources"))  # True가 나와야 정상

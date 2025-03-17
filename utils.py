@@ -81,8 +81,16 @@ def neg_sample(item_set, item_size):
     while item in item_set:
         item = random.randint(1, item_size - 1)
     return item
-
-
+'''
+def neg_sample(item_set, item_size):
+    item_k = []
+    while len(item_k) != 4:
+        item = random.randint(1, item_size - 1)
+        while item in item_set:
+            item = random.randint(1, item_size - 1)
+            item_k.append(item)
+    return item_k
+'''
 
 def get_user_seqs(args):
     a_time_seq = []
@@ -141,7 +149,7 @@ def get_user_seqs(args):
     s_test_rating_matrix = generate_rating_matrix_test(s_user_seq, num_users, num_items)
     valid_rating_matrix = generate_rating_matrix_valid(a_user_seq, num_users, num_items)
     test_rating_matrix = generate_rating_matrix_test(a_user_seq, num_users, num_items)
-    return n_user_seq, n_time_seq,s_user_seq, s_time_seq, max_item, valid_rating_matrix,test_rating_matrix , not_aug_users, n_valid_rating_matrix,n_test_rating_matrix,s_valid_rating_matrix,s_test_rating_matrix  
+    return a_user_seq, a_time_seq,n_user_seq, n_time_seq,s_user_seq, s_time_seq, max_item, valid_rating_matrix,test_rating_matrix , not_aug_users, n_valid_rating_matrix,n_test_rating_matrix,s_valid_rating_matrix,s_test_rating_matrix  
 def get_var(n_user_diff, s_user_diff):
     n_user_var = defaultdict(float)
     s_user_var = defaultdict(float)

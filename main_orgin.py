@@ -152,10 +152,6 @@ def main():
     args.train_matrix = valid_rating_matrix
     args.n_train_matrix = n_valid_rating_matrix
     args.s_train_matrix = s_valid_rating_matrix
-    
-    args.test_matrix = test_rating_matrix 
-    args.n_test_matrix = n_test_rating_matrix 
-    args.s_test_matrix = s_test_rating_matrix
     # -----------   pre-computation for item similarity   ------------ #
     args.similarity_model_path = os.path.join(args.data_dir,
                                               args.data_name + '_' + args.similarity_model_name + '_similarity.pkl')

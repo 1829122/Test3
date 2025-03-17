@@ -7,7 +7,8 @@ from utils import neg_sample
 class DataSets(Dataset):
     def __init__(self, args, user_seq, time_seq, not_aug_users=None, data_type='train'):
         self.args = args
-        self.user_seq = user_seq
+        self.user_seq = []
+        self.user_ids = []
         self.time_seq = time_seq
         self.data_type = data_type
         self.similarity_model = args.offline_similarity_model
@@ -21,6 +22,18 @@ class DataSets(Dataset):
                               'random': Random(args, self.similarity_model),
                               'combinatorial_enumerate': CombinatorialEnumerate(args, self.similarity_model)}
         self.base_transform = self.augmentations[self.args.base_augment_type]
+        self.contrastive_learning = False
+        if self.data_type=='train':
+            for user, seq in enumerate(user_seq):
+                input_ids = seq[-(self.max_len + 2):-2]
+                for i in range(len(input_ids)):
+                    self.user_seq.append(input_ids[:i + 1])
+                    self.user_ids.append(user)
+        elif self.data_type=='valid':
+            for sequence in user_seq:
+                self.user_seq.append(sequence[:-1])
+        else:
+            self.user_seq = user_seq
         self.total_train_users = 0
         self.model_warm_up_train_users = args.model_warm_up_epochs * len(user_seq)
         self.not_aug_users = [99999]
@@ -119,13 +132,6 @@ class DataSets(Dataset):
         user_id = index
         items = self.user_seq[index]
         
-
-        times = self.time_seq[index]
-        if len(times) <= 1:
-            input_times = times
-        else:
-            input_times = times[:-2]
-
         self.total_train_users += 1
 
         assert self.data_type in {"train", "valid", "test"}
@@ -133,38 +139,63 @@ class DataSets(Dataset):
         # [0, 1, 2, 3, 4, 5, 6]
         # train [0, 1, 2, 3]
         # target [1, 2, 3, 4]
-        if self.data_type == "train":
-            input_ids = items[:-3]
-            target_pos = items[1:-2]
-            answer = [0]  # no use
-        elif self.data_type == 'valid':
-            input_ids = items[:-2]
-            target_pos = items[1:-1]
-            answer = [items[-2]]
-        else:
-            input_ids = items[:-1]
-            target_pos = items[1:]
-            answer = [items[-1]]
+        items = self.user_seq[index]
+        input_ids = items[:-1]
+        answer = items[-1]
 
-        if self.data_type == "train":
-            cur_rec_tensors = self._data_sample_rec_task(user_id, items, input_ids, target_pos, answer)
-            cf_tensors_list = []
-            not_aug = False
-            # if n_views == 2, then it's downgraded to pair-wise contrastive learning
-            total_augmentation_pairs = 1
-            if self.total_train_users <= self.model_warm_up_train_users:
-                total_augmentation_pairs = 0
-            if (user_id in self.not_aug_users) and (self.total_train_users > self.model_warm_up_train_users):
-                not_aug = True
-            for i in range(total_augmentation_pairs):
-                cf_tensors_list.append(self.data_augmentation(input_ids, input_times, not_aug))
-            return cur_rec_tensors, cf_tensors_list
-        elif self.data_type == 'valid':
-            cur_rec_tensors = self._data_sample_rec_task(user_id, items, input_ids, target_pos, answer)
-            return cur_rec_tensors
+        seq_set = set(items)
+        neg_answer = neg_sample(seq_set, self.args.item_size)
+
+        pad_len = self.max_len - len(input_ids)
+        input_ids = [0] * pad_len + input_ids
+        input_ids = input_ids[-self.max_len:]
+        assert len(input_ids) == self.max_len
+
+        if self.data_type in ['valid', 'test']:
+            answer = [items[-1]]
+            cur_tensors = (
+                torch.tensor(index, dtype=torch.long),  # user_id for testing
+                torch.tensor(input_ids, dtype=torch.long),
+                torch.tensor(answer, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long), # not used
+                torch.zeros(0, dtype=torch.long), # not used
+            )
+
+        elif self.contrastive_learning:
+            sem_augs = self.same_target_index[answer]
+            sem_aug = random.choice(sem_augs)
+            keep_random = False
+            for i in range(len(sem_augs)):
+                if sem_augs[0] != sem_augs[i]:
+                    keep_random = True
+
+            while keep_random and sem_aug == items:
+                sem_aug = random.choice(sem_augs)
+
+            sem_aug = sem_aug[:-1]
+            pad_len = self.max_len - len(sem_aug)
+            sem_aug = [0] * pad_len + sem_aug
+            sem_aug = sem_aug[-self.max_len:]
+            assert len(sem_aug) == self.max_len
+
+            cur_tensors = (
+                torch.tensor(self.user_ids[index], dtype=torch.long),  # user_id for testing
+                torch.tensor(input_ids, dtype=torch.long),
+                torch.tensor(answer, dtype=torch.long),
+                torch.tensor(neg_answer, dtype=torch.long),
+                torch.tensor(sem_aug, dtype=torch.long)
+            )
+
         else:
-            cur_rec_tensors = self._data_sample_rec_task(user_id, items, input_ids, target_pos, answer)
-            return cur_rec_tensors
+            cur_tensors = (
+                torch.tensor(self.user_ids[index], dtype=torch.long),  # user_id for testing
+                torch.tensor(input_ids, dtype=torch.long),
+                torch.tensor(answer, dtype=torch.long),
+                torch.tensor(neg_answer, dtype=torch.long),
+                torch.zeros(0, dtype=torch.long), # not used
+            )
+
+        return cur_tensors
 
     def __len__(self):
         """

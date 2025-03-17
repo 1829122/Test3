@@ -42,11 +42,9 @@ class SASRec(nn.Module):
 
         # define layers and loss
         self.item_embedding = nn.Embedding(self.item_size, self.hidden_size, padding_idx=0)
-        #self.item_embedding2 = nn.Embedding(self.item_size, self.hidden_size, padding_idx=0)
         self.position_embedding = nn.Embedding(self.max_seq_length, self.hidden_size) # n
         self.position_embedding2 = nn.Embedding(self.max_seq_length, self.hidden_size) # s
-        self.position_embedding3 = nn.Embedding(self.max_seq_length, self.hidden_size) # t
-        self.gate = nn.Linear(self.hidden_size * 2, 2)
+        self.position_embedding3 = nn.Embedding(self.max_seq_length, self.hidden_size)
         self.trm_encoder = TransformerEncoder( # n
             n_layers=self.n_layers,
             n_heads=self.n_heads,
@@ -124,7 +122,7 @@ class SASRec(nn.Module):
 
         trm_output = self.trm_encoder2(input_emb, extended_attention_mask, output_all_encoded_layers=True)
         s_output = trm_output[-1]
-
+        
         position_embedding = self.position_embedding3(position_ids)
 
         item_emb = self.item_embedding(item_seq)
@@ -137,17 +135,9 @@ class SASRec(nn.Module):
         trm_output = self.trm_encoder3(input_emb, extended_attention_mask, output_all_encoded_layers=True)
         t_output = trm_output[-1]
 
-        gate_output = torch.cat([n_output, s_output], dim = -1)
-        gate_score = self.gate(gate_output)
-        # 마지막 차원에 대해 softmax -> (B, L, 2)
-        alpha = torch.softmax(gate_score, dim=-1)
+        
 
-        # 브로드캐스팅을 통해 최종 가중합 (B, L, H)
-        fused_output = alpha[..., 0].unsqueeze(-1) * n_output + alpha[..., 1].unsqueeze(-1) * s_output
-
-        # 이후 필요하다면 fused_output 반환 혹은 후속 연
-
-        return n_output, s_output, fused_output
+        return n_output, s_output, t_output
 
 
 
