@@ -41,7 +41,7 @@ def check_path(path):
         print(f"{path} created")
 
 
-def neg_sample(item_set, item_size):  # 前闭后闭
+def neg_sample(item_set, item_size):  # []
     item = random.randint(1, item_size - 1)
     while item in item_set:
         item = random.randint(1, item_size - 1)
@@ -149,40 +149,92 @@ def generate_rating_matrix_test(user_seq, num_users, num_items):
     return rating_matrix
 
 
-def get_user_seqs(args):
-    user_idxs = []
-    item_lines1 = open(args.n_data_file).readlines()
-    a_user_seq = []
-    n_user_seq = []
-    s_user_seq = []
+def get_user_seqs(args, mode):
+    if mode == 'train':
+        a_user_seq = []
+        a_user_id=[]
+        lines = open(args.train_data_file).readlines()
+        item_set = set()
+        for line in lines:
+            user, items = line.strip().split(" ", 1)
+            items = items.split(" ")
+            items = [int(item) for item in items]
+            a_user_seq.append(items)
+            a_user_id.append(int(user))
+            item_set = item_set | set(items)
+        lines = open(args.n_train_data_file).readlines()
+        n_user_seq = []
+        n_user_id=[]
+        s_user_seq = []
+        s_user_id=[]
+        for line in lines:
+            user, items = line.strip().split(" ", 1)
+            items = items.split(" ")
+            items = [int(item) for item in items]
+            n_user_seq.append(items)
+            n_user_id.append(int(user))
+        lines = open(args.s_train_data_file).readlines()
+        for line in lines:
+            user, items = line.strip().split(" ", 1)
+            items = items.split(" ")
+            items = [int(item) for item in items]
+            s_user_seq.append(items)
+            s_user_id.append(int(user))
+        max_item = max(item_set)
+        return a_user_id, a_user_seq, n_user_id, n_user_seq, s_user_id, s_user_seq,max_item
+    else:
+        lines = open(args.data_file).readlines()
+        item_set = set()
+        for line in lines:
+            user, items = line.strip().split(" ", 1)
+            items = items.split(" ")
+            items = [int(item) for item in items]
+            item_set = item_set | set(items)
+        max_item = max(item_set)
+        num_users = len(lines)
+        num_items = max_item+2
+        lines = open(args.n_data_file).readlines()
+        n_user_seq = []
+        n_user_id=[]
+        s_user_seq = []
+        s_user_id=[]
+        for line in lines:
+            user, items = line.strip().split(" ", 1)
+            items = items.split(" ")
+            items = [int(item) for item in items]
+            n_user_seq.append(items)
+            n_user_id.append(int(user))
+        lines = open(args.s_data_file).readlines()
+        for line in lines:
+            user, items = line.strip().split(" ", 1)
+            items = items.split(" ")
+            items = [int(item) for item in items]
+            s_user_seq.append(items)
+            s_user_id.append(int(user))
+        max_item = max(item_set)
+        
+        n_valid_rating_matrix = generate_rating_matrix_valid(n_user_seq, num_users, num_items)
+        n_test_rating_matrix = generate_rating_matrix_test(n_user_seq, num_users, num_items)
+        s_valid_rating_matrix = generate_rating_matrix_valid(s_user_seq, num_users, num_items)
+        s_test_rating_matrix = generate_rating_matrix_test(s_user_seq, num_users, num_items)
+        return n_user_seq, s_user_seq, n_valid_rating_matrix, n_test_rating_matrix, s_valid_rating_matrix, s_test_rating_matrix, max_item
+    
+
+def get_user_seqs_long(data_file):
+    lines = open(data_file).readlines()
+    user_seq = []
+    long_sequence = []
     item_set = set()
-    for line in item_lines1:
-        user, items = line.strip().split(' ', 1)
-        items = items.split(' ')
+    for line in lines:
+        user, items = line.strip().split(" ", 1)
+        items = items.split(" ")
         items = [int(item) for item in items]
-        n_user_seq.append(items)
-        a_user_seq.append(items)
-        item_set = item_set | set(items)
-    item_lines2 = open(args.s_data_file).readlines()
-    for line in item_lines2:
-        user, items = line.strip().split(' ', 1)
-        items = items.split(' ')
-        items = [int(item) for item in items]
-        a_user_seq.append(items)
-        s_user_seq.append(items)
+        long_sequence.extend(items)
+        user_seq.append(items)
         item_set = item_set | set(items)
     max_item = max(item_set)
 
-    item_lines = item_lines1 + item_lines2
-    num_users = len(item_lines)
-    num_items = max_item + 2
-    n_valid_rating_matrix = generate_rating_matrix_valid(n_user_seq, num_users, num_items)
-    n_test_rating_matrix = generate_rating_matrix_test(n_user_seq, num_users, num_items)
-    s_valid_rating_matrix = generate_rating_matrix_valid(s_user_seq, num_users, num_items)
-    s_test_rating_matrix = generate_rating_matrix_test(s_user_seq, num_users, num_items)
-    valid_rating_matrix = generate_rating_matrix_valid(a_user_seq, num_users, num_items)
-    test_rating_matrix = generate_rating_matrix_test(a_user_seq, num_users, num_items)
-    return a_user_seq, n_user_seq, s_user_seq, max_item, valid_rating_matrix,test_rating_matrix , n_valid_rating_matrix,n_test_rating_matrix,s_valid_rating_matrix,s_test_rating_matrix
+    return user_seq, max_item, long_sequence
 
 
 def get_user_seqs_long(data_file):
@@ -194,7 +246,7 @@ def get_user_seqs_long(data_file):
         user, items = line.strip().split(" ", 1)
         items = items.split(" ")
         items = [int(item) for item in items]
-        long_sequence.extend(items)  # 后面的都是采的负例
+        long_sequence.extend(items)
         user_seq.append(items)
         item_set = item_set | set(items)
     max_item = max(item_set)
